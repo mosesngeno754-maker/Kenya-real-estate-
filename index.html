@@ -264,7 +264,8 @@
         <button class="btn btn-primary wide" id="authSubmit" type="submit">Create account</button>
       </form>
       <p class="modal-switch" id="switchText">Already registered? <button class="text-button" id="switchMode" type="button">Log in</button></p>
-      <div class="notice" style="margin-top:15px">Prototype only: this form does not create accounts or securely authenticate users. Production sign-up requires a backend/auth provider, server-side validation, password hashing, email verification and rate limits.</div>
+      <p class="modal-switch hidden" id="resetPasswordRow"><button class="text-button" id="resetPasswordBtn" type="button">Forgot password?</button></p>
+      <div class="notice" style="margin-top:15px">Accounts are handled by Supabase Auth. You will be asked to verify your email and Kenyan phone number before you can post a property.</div>
     </div>
   </div>
 
@@ -286,7 +287,7 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
   <script>
     // Supabase connection. The publishable key is safe for browser use when RLS is enabled.
     const SUPABASE_URL = "https://atubjtggabookcvprgfg.supabase.co";
@@ -404,6 +405,7 @@
       $('authEmail').readOnly = false;
       $('authSubmit').textContent = mode === 'signup' ? 'Create account' : 'Log in';
       $('switchText').innerHTML = mode === 'signup' ? 'Already registered? <button class="text-button" id="switchMode" type="button">Log in</button>' : 'New here? <button class="text-button" id="switchMode" type="button">Create an account</button>';
+      $('switchText').classList.remove('hidden');
       $('resetPasswordRow').classList.toggle('hidden', mode !== 'login');
       setAuthStatus('');
       $('authForm').reset();
@@ -610,6 +612,28 @@
       status.className = 'status success';
       status.textContent = 'Listing submitted for review. It will not appear publicly until approved by an administrator.';
       $('postForm').reset();
+    });
+    $('loginBtn').addEventListener('click', () => {
+      if (currentUser) alert('Logged in as ' + currentUser.email);
+      else openAuth('login');
+    });
+    $('signupBtn').addEventListener('click', async () => {
+      if (currentUser) { await supabaseClient.auth.signOut(); currentUser = null; }
+      else openAuth('signup');
+    });
+    $('authForm').addEventListener('submit', submitAuth);
+    $('closeModal').addEventListener('click', closeAuth);
+    $('authModal').addEventListener('click', e => { if (e.target === $('authModal')) closeAuth(); });
+    $('showPasswords').addEventListener('change', e => {
+      const type = e.target.checked ? 'text' : 'password';
+      $('authPassword').type = type; $('confirmPassword').type = type;
+    });
+    document.querySelectorAll('[data-purpose]').forEach(btn => btn.addEventListener('click', () => setPurpose(btn.dataset.purpose)));
+    $('searchForm').addEventListener('submit', searchProperties);
+    $('county').addEventListener('change', updateConstituencies);
+    $('currency').addEventListener('change', () => {
+      try { localStorage.setItem('kpf_currency', $('currency').value); } catch (_) {}
+      searchProperties();
     });
     try {
       const savedCurrency = localStorage.getItem('kpf_currency');
