@@ -270,7 +270,7 @@
     // You can still preview the site by opening it with ?preview=mose2026 at the end of the link.
     const PREVIEW_KEY = 'mose2026';
     (function () {
-      let preview = false;
+      let preview = true;
       try { preview = new URLSearchParams(location.search).get('preview') === PREVIEW_KEY; if (preview) sessionStorage.setItem('kpf_preview', '1'); else preview = sessionStorage.getItem('kpf_preview') === '1'; } catch (_) {}
       if (MAINTENANCE_MODE && !preview) {
         document.getElementById('maintenance').classList.add('on');
