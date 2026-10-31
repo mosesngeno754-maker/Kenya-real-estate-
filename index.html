@@ -264,8 +264,7 @@
         <button class="btn btn-primary wide" id="authSubmit" type="submit">Create account</button>
       </form>
       <p class="modal-switch" id="switchText">Already registered? <button class="text-button" id="switchMode" type="button">Log in</button></p>
-      <p class="modal-switch hidden" id="resetPasswordRow"><button class="text-button" id="resetPasswordBtn" type="button">Forgot password?</button></p>
-      <div class="notice" style="margin-top:15px">Accounts are handled by Supabase Auth. You will be asked to verify your email and Kenyan phone number before you can post a property.</div>
+      <div class="notice" style="margin-top:15px">Prototype only: this form does not create accounts or securely authenticate users. Production sign-up requires a backend/auth provider, server-side validation, password hashing, email verification and rate limits.</div>
     </div>
   </div>
 
@@ -275,4 +274,368 @@
       <form id="postForm" class="form-stack">
         <div class="field"><label for="postTitleInput">Property title</label><input id="postTitleInput" required placeholder="e.g. 3-bedroom house in Ruiru"></div>
         <div class="field"><label for="postPurpose">Listing type</label><select id="postPurpose"><option>For sale</option><option>For rent</option><option>Commercial</option><option>Short stay</option></select></div>
-        <div class="fi
+        <div class="field"><label for="postPrice">Price in KES (KSh)</label><input id="postPrice" type="number" min="1" required placeholder="e.g. 8500000"></div>
+        <div class="field"><label for="postCounty">County</label><select id="postCounty" required><option value="">Choose county</option><option>Nairobi</option><option>Kiambu</option><option>Mombasa</option><option>Nakuru</option><option>Machakos</option><option>Kajiado</option><option>Other county</option></select></div>
+        <div class="field"><label for="postLocation">Constituency, town/estate, road or landmark</label><input id="postLocation" required placeholder="e.g. Juja, near a named landmark"></div>
+        <div class="field"><label for="postDescription">Description</label><textarea id="postDescription" rows="3" placeholder="Describe the property, amenities and access."></textarea></div>
+        <div class="field"><label for="postPhotos">Property photos</label><input id="postPhotos" type="file" accept="image/*" multiple></div>
+        <div class="notice">Publishing must be connected to a verified account and server-side ID/face verification, listing moderation and property-authorisation checks. This demo does not upload or publish property listings.</div>
+        <p class="status" id="postStatus" aria-live="polite"></p>
+        <button class="btn btn-primary wide" type="submit">Preview listing details</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // Supabase connection. The publishable key is safe for browser use when RLS is enabled.
+    const SUPABASE_URL = "https://atubjtggabookcvprgfg.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_jZ3cRfchXqxDumsKM3YLwg_8zQPhb8S";
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+    // Demo-only data. Replace with an API/database before production.
+    const exchangeRates = { KES: 1, USD: 0.0077, GBP: 0.0057, EUR: 0.0066, UGX: 27.5, TZS: 19.8, NGN: 11.9, AED: 0.0283 };
+    const currencySymbols = { KES: 'KSh', USD: '$', GBP: '£', EUR: '€', UGX: 'USh', TZS: 'TSh', NGN: '₦', AED: 'د.إ' };
+    const exampleProperties = [
+      { id: 1, title: 'Modern 3-bedroom family home', purpose: 'Buy', type: 'House', county: 'Kiambu', constituency: 'Juja', location: 'Ruiru, near Thika Road', price: 8500000, beds: 3, baths: 2, tag: 'Example listing', symbol: '⌂' },
+      { id: 2, title: 'Bright 2-bedroom apartment', purpose: 'Rent', type: 'Apartment', county: 'Nairobi', constituency: 'Kasarani', location: 'Roysambu, near Thika Road', price: 35000, beds: 2, baths: 1, tag: 'Example listing', symbol: '▦' },
+      { id: 3, title: 'Residential plot', purpose: 'Buy', type: 'Land or plot', county: 'Machakos', constituency: 'Mavoko', location: 'Athi River, near a main access road', price: 1800000, beds: 0, baths: 0, tag: 'Example listing', symbol: '▱' }
+    ];
+    const constituencyByCounty = {
+      Nairobi: ['Dagoretti North','Dagoretti South','Embakasi Central','Embakasi East','Embakasi North','Embakasi South','Embakasi West','Kamukunji','Kasarani','Kibra','Lang’ata','Makadara','Mathare','Roysambu','Ruaraka','Starehe','Westlands'],
+      Kiambu: ['Gatundu North','Gatundu South','Githunguri','Juja','Kabete','Kiambaa','Kiambu','Kikuyu','Lari','Limuru','Ruiru','Thika Town'],
+      Mombasa: ['Changamwe','Jomvu','Kisauni','Likoni','Mvita','Nyali'],
+      Machakos: ['Kathiani','Machakos Town','Masinga','Matungulu','Mavoko','Mwala','Yatta'],
+      Nakuru: ['Bahati','Gilgil','Kuresoi North','Kuresoi South','Molo','Naivasha','Nakuru Town East','Nakuru Town West','Njoro','Rongai','Subukia'],
+      Kajiado: ['Kajiado Central','Kajiado East','Kajiado North','Kajiado South','Kajiado West'],
+      Kisumu: ['Kisumu Central','Kisumu East','Kisumu West','Muhoroni','Nyakach','Nyando','Seme'],
+      'Uasin Gishu': ['Ainabkoi','Kapseret','Kesses','Moiben','Soy','Turbo']
+    };
+    let activePurpose = 'Buy';
+    let authMode = 'signup';
+    let currentUser = null;
+    const $ = id => document.getElementById(id);
+
+    function formatMoney(kes, currency = $('currency').value) {
+      const amount = Number(kes) * (exchangeRates[currency] || 1);
+      const decimals = currency === 'KES' || currency === 'UGX' || currency === 'TZS' || currency === 'NGN' ? 0 : 2;
+      return `${currencySymbols[currency] || currency} ${amount.toLocaleString('en-US', { maximumFractionDigits: decimals })}`;
+    }
+    function updateConstituencies() {
+      const county = $('county').value;
+      const select = $('constituency');
+      const old = select.value;
+      select.innerHTML = '<option value="">All constituencies</option>';
+      (constituencyByCounty[county] || []).forEach(name => {
+        const option = document.createElement('option');
+        option.value = name; option.textContent = name; select.appendChild(option);
+      });
+      if ([...select.options].some(o => o.value === old)) select.value = old;
+    }
+    function renderProperties(items) {
+      const grid = $('propertyGrid');
+      grid.innerHTML = '';
+      $('resultCount').textContent = `${items.length} ${items.length === 1 ? 'listing' : 'listings'}`;
+      if (!items.length) {
+        grid.innerHTML = '<div class="empty"><strong>No matching example listings.</strong><br>Try a broader location or clear some filters. Live listings will appear when a backend is connected.</div>';
+        return;
+      }
+      items.forEach(p => {
+        const card = document.createElement('article');
+        card.className = 'property-card';
+        card.innerHTML = `
+          <div class="property-image" aria-label="Illustrative property image"><span>${p.tag || 'Example listing'}</span>${p.symbol || '⌂'}</div>
+          <div class="property-content">
+            <p class="property-title"></p>
+            <p class="location"></p>
+            <div class="price"></div>
+            <div class="meta"><span>${p.type}</span>${p.beds ? `<span>${p.beds} beds</span>` : ''}${p.baths ? `<span>${p.baths} baths</span>` : ''}<span>${p.purpose === 'Rent' ? 'For rent' : 'For sale'}</span></div>
+          </div>`;
+        card.querySelector('.property-title').textContent = p.title;
+        card.querySelector('.location').textContent = `${p.location} · ${p.county} County`;
+        card.querySelector('.price').textContent = `${formatMoney(p.price)}${p.purpose === 'Rent' ? ' / month' : ''}`;
+        grid.appendChild(card);
+      });
+    }
+    function searchProperties(event) {
+      if (event) event.preventDefault();
+      const county = $('county').value;
+      const constituency = $('constituency').value;
+      const location = $('location').value.trim().toLowerCase();
+      const type = $('propertyType').value;
+      const min = Number($('minPrice').value || 0);
+      const max = Number($('maxPrice').value || Infinity);
+      const beds = Number($('bedrooms').value || 0);
+      let items = exampleProperties.filter(p => {
+        const purposeMatches = activePurpose === 'Commercial' ? p.type === 'Commercial property' : p.purpose === activePurpose;
+        const text = `${p.title} ${p.location} ${p.county} ${p.constituency}`.toLowerCase();
+        return purposeMatches && (!county || p.county === county) && (!constituency || p.constituency === constituency) && (!location || text.includes(location)) && (!type || p.type === type) && p.price >= min && p.price <= max && p.beds >= beds;
+      });
+      $('resultsTitle').textContent = 'Property search results';
+      $('resultsSubtitle').textContent = 'These are illustrative demo listings, not live property adverts.';
+      renderProperties(items);
+    }
+    function setPurpose(purpose) {
+      activePurpose = purpose;
+      document.querySelectorAll('[data-purpose]').forEach(btn => btn.classList.toggle('active', btn.dataset.purpose === purpose));
+      $('resultsTitle').textContent = purpose === 'Buy' ? 'Properties for sale' : purpose === 'Rent' ? 'Properties for rent' : 'Commercial properties';
+      searchProperties();
+    }
+    let authStep = 'credentials';
+    let pendingPhone = '';
+    function setAuthStatus(message, type = 'error') {
+      $('authStatus').textContent = message;
+      $('authStatus').className = `status ${type}`;
+    }
+    function openAuth(mode) {
+      authMode = mode;
+      authStep = 'credentials';
+      $('authTitle').textContent = mode === 'signup' ? 'Create your account' : 'Welcome back';
+      $('authSubtitle').textContent = mode === 'signup' ? 'Verify your email and Kenyan phone number to create your account.' : 'Log in to manage your account and property listings.';
+      $('authPassword').autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+      $('confirmGroup').classList.toggle('hidden', mode !== 'signup');
+      $('confirmPassword').required = mode === 'signup';
+      $('passwordRules').classList.toggle('hidden', mode !== 'signup');
+      $('phoneGroup').classList.toggle('hidden', mode !== 'signup');
+      $('otpGroup').hidden = true;
+      $('authOtp').required = false;
+      $('authPasswordGroup').classList.remove('hidden');
+      $('authPassword').required = true;
+      $('authEmail').readOnly = false;
+      $('authSubmit').textContent = mode === 'signup' ? 'Create account' : 'Log in';
+      $('switchText').innerHTML = mode === 'signup' ? 'Already registered? <button class="text-button" id="switchMode" type="button">Log in</button>' : 'New here? <button class="text-button" id="switchMode" type="button">Create an account</button>';
+      $('resetPasswordRow').classList.toggle('hidden', mode !== 'login');
+      setAuthStatus('');
+      $('authForm').reset();
+      $('authModal').classList.add('open');
+      $('authEmail').focus();
+      $('switchMode').addEventListener('click', () => openAuth(authMode === 'signup' ? 'login' : 'signup'));
+    }
+    function closeAuth() { $('authModal').classList.remove('open'); }
+    function passwordProblem(pw) {
+      if (pw.length < 6) return 'Use at least 6 characters.';
+      if (!/[A-Z]/.test(pw)) return 'Include at least one uppercase letter (A–Z).';
+      if (!/[a-z]/.test(pw)) return 'Include at least one lowercase letter (a–z).';
+      const common = new Set(['password','password1','qwerty123','letmein','welcome1','admin123','iloveyou','abc123','mango7']);
+      if (common.has(pw.toLowerCase())) return 'Choose a less common password.';
+      const normalized = pw.toLowerCase();
+      const sequences = ['0123456789','abcdefghijklmnopqrstuvwxyz','qwertyuiop','asdfghjkl','zxcvbnm'];
+      for (const seq of sequences) {
+        for (let i = 0; i <= seq.length - 4; i++) {
+          const part = seq.slice(i, i + 4);
+          if (normalized.includes(part) || normalized.includes([...part].reverse().join(''))) return 'Avoid obvious consecutive sequences such as 123456 or Abcdef.';
+        }
+      }
+      return '';
+    }
+    function normalizeKenyanPhone(value) {
+      let phone = value.replace(/[\s()-]/g, '');
+      if (phone.startsWith('0')) phone = '+254' + phone.slice(1);
+      else if (phone.startsWith('254')) phone = '+' + phone;
+      return /^\+254[17]\d{8}$/.test(phone) ? phone : '';
+    }
+    async function saveProfile(user, phone) {
+      const { error } = await supabaseClient.from('profiles').upsert({
+        id: user.id,
+        email: user.email,
+        phone: phone || user.phone || null,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+      if (error) console.warn('Profile save:', error.message);
+    }
+    async function startPhoneVerification(phone) {
+      const normalized = normalizeKenyanPhone(phone);
+      if (!normalized) { setAuthStatus('Enter a valid Kenyan number, for example +254712345678.'); return; }
+      pendingPhone = normalized;
+      const { error } = await supabaseClient.auth.updateUser({ phone: normalized });
+      if (error) { setAuthStatus(error.message); return; }
+      authStep = 'phoneOtp';
+      $('authTitle').textContent = 'Verify your phone';
+      $('authSubtitle').textContent = `Enter the SMS code sent to ${normalized}.`;
+      $('phoneGroup').classList.add('hidden');
+      $('authPhone').required = false;
+      $('authOtp').required = true;
+      $('authPassword').required = false;
+      $('authPasswordGroup').classList.add('hidden');
+      $('confirmGroup').classList.add('hidden');
+      $('passwordRules').classList.add('hidden');
+      $('otpGroup').hidden = false;
+      $('authOtp').value = '';
+      $('authOtp').focus();
+      $('authSubmit').textContent = 'Verify phone';
+      setAuthStatus('A verification code has been requested. SMS delivery depends on your configured provider.', 'success');
+    }
+    async function finishVerifiedAccount(user) {
+      currentUser = user;
+      await saveProfile(user, pendingPhone || user.phone);
+      closeAuth();
+      $('loginBtn').textContent = 'Account';
+      $('signupBtn').textContent = 'Log out';
+      $('heroPostBtn').textContent = 'Post a property';
+    }
+    async function submitAuth(event) {
+      event.preventDefault();
+      const status = $('authStatus');
+      const email = $('authEmail').value.trim();
+      const pw = $('authPassword').value;
+      const submit = $('authSubmit');
+      submit.disabled = true;
+      try {
+        if (authStep === 'recovery') {
+          if (pw.length < 6) throw new Error('Use at least 6 characters for your new password.');
+          const { error } = await supabaseClient.auth.updateUser({ password: pw });
+          if (error) throw error;
+          setAuthStatus('Password updated. You can now log in with your new password.', 'success');
+          authStep = 'credentials';
+          $('authPassword').value = '';
+          return;
+        }
+        if (authStep === 'emailOtp') {
+          const { data, error } = await supabaseClient.auth.verifyOtp({ email, token: $('authOtp').value.trim(), type: 'signup' });
+          if (error) throw error;
+          currentUser = data.user;
+          await startPhoneVerification(pendingPhone);
+          return;
+        }
+        if (authStep === 'phoneAdd') {
+          const phone = normalizeKenyanPhone($('authPhone').value);
+          if (!phone) throw new Error('Enter a valid Kenyan phone number, for example +254712345678.');
+          await startPhoneVerification(phone);
+          return;
+        }
+        if (authStep === 'phoneOtp') {
+          const { data, error } = await supabaseClient.auth.verifyOtp({ phone: pendingPhone, token: $('authOtp').value.trim(), type: 'phone_change' });
+          if (error) throw error;
+          await finishVerifiedAccount(data.user);
+          alert('Your email and phone have been verified. Your account is ready.');
+          return;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
+        if (authMode === 'signup') {
+          const issue = passwordProblem(pw);
+          if (issue) throw new Error(issue);
+          if (pw !== $('confirmPassword').value) throw new Error('Passwords do not match.');
+          const phone = normalizeKenyanPhone($('authPhone').value);
+          if (!phone) throw new Error('Enter a valid Kenyan phone number, for example +254712345678.');
+          pendingPhone = phone;
+          const { data, error } = await supabaseClient.auth.signUp({
+            email, password: pw,
+            options: { emailRedirectTo: window.location.origin, data: { phone, marketplace: 'Kenya Property Finder' } }
+          });
+          if (error) throw error;
+          if (data.session) {
+            currentUser = data.user;
+            await startPhoneVerification(phone);
+          } else {
+            authStep = 'emailOtp';
+            $('authTitle').textContent = 'Verify your email';
+            $('authSubtitle').textContent = `Enter the 6-digit email code sent to ${email}.`;
+            $('phoneGroup').classList.add('hidden');
+            $('authPasswordGroup').classList.add('hidden');
+            $('confirmGroup').classList.add('hidden');
+            $('passwordRules').classList.add('hidden');
+            $('otpGroup').hidden = false;
+            $('authOtp').required = true;
+            $('authPassword').required = false;
+            $('authOtp').value = '';
+            $('authOtp').focus();
+            $('authSubmit').textContent = 'Verify email';
+            setAuthStatus('Check your inbox (and spam folder) for the verification code.', 'success');
+          }
+        } else {
+          const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: pw });
+          if (error) throw error;
+          currentUser = data.user;
+          if (!data.user.email_confirmed_at) throw new Error('Please verify your email before continuing.');
+          if (!data.user.phone_confirmed_at) {
+            const phone = normalizeKenyanPhone(data.user.phone || data.user.user_metadata?.phone || '');
+            if (!phone) {
+              authStep = 'phoneAdd';
+              $('authTitle').textContent = 'Add your phone number';
+              $('authSubtitle').textContent = 'Enter your Kenyan phone number in the phone field, then request a code.';
+              $('phoneGroup').classList.remove('hidden');
+              $('authPhone').required = true;
+              $('authPassword').required = false;
+              $('authPasswordGroup').classList.add('hidden');
+              $('confirmGroup').classList.add('hidden');
+              $('passwordRules').classList.add('hidden');
+              $('authSubmit').textContent = 'Continue';
+              throw new Error('This account needs phone verification. Enter your phone number.');
+            }
+            await startPhoneVerification(phone);
+            return;
+          }
+          await finishVerifiedAccount(data.user);
+        }
+      } catch (error) {
+        setAuthStatus(error.message || 'Something went wrong. Please try again.');
+      } finally { submit.disabled = false; }
+    }
+    async function requestPasswordReset() {
+      const email = $('authEmail').value.trim();
+      if (!email) { setAuthStatus('Enter your email address first.'); return; }
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (error) setAuthStatus(error.message);
+      else setAuthStatus('Password reset instructions have been sent if the account exists.', 'success');
+    }
+    $('resetPasswordBtn').addEventListener('click', requestPasswordReset);
+    $('heroPostBtn').addEventListener('click', () => {
+      if (!currentUser) { openAuth('signup'); $('authStatus').textContent = 'Create an account first. In the production site, identity verification will be required before publishing.'; }
+      else $('postModal').classList.add('open');
+    });
+    $('closePostModal').addEventListener('click', () => $('postModal').classList.remove('open'));
+    $('postModal').addEventListener('click', e => { if (e.target === $('postModal')) $('postModal').classList.remove('open'); });
+    $('postForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const status = $('postStatus');
+      if (!currentUser) { status.className = 'status error'; status.textContent = 'Please log in first.'; return; }
+      if (!currentUser.email_confirmed_at || !currentUser.phone_confirmed_at) { status.className = 'status error'; status.textContent = 'Verify both your email and phone before submitting a listing.'; return; }
+      const files = $('postPhotos').files;
+      if (files.length) { status.className = 'status error'; status.textContent = 'Property photo upload will be enabled after the Storage bucket and policies are configured. Remove photos for this initial database test.'; return; }
+      status.className = 'status'; status.textContent = 'Saving listing…';
+      const purposeValue = $('postPurpose').value;
+      const purpose = purposeValue === 'For rent' ? 'Rent' : purposeValue === 'Commercial' ? 'Commercial' : purposeValue === 'Short stay' ? 'Short stay' : 'Buy';
+      const listing = {
+        owner_id: currentUser.id,
+        title: $('postTitleInput').value.trim(),
+        purpose,
+        price_kes: Number($('postPrice').value),
+        county: $('postCounty').value,
+        location: $('postLocation').value.trim(),
+        description: $('postDescription').value.trim(),
+        status: 'pending'
+      };
+      const { error } = await supabaseClient.from('properties').insert(listing);
+      if (error) { status.className = 'status error'; status.textContent = error.message; return; }
+      status.className = 'status success';
+      status.textContent = 'Listing submitted for review. It will not appear publicly until approved by an administrator.';
+      $('postForm').reset();
+    });
+    try {
+      const savedCurrency = localStorage.getItem('kpf_currency');
+      if (savedCurrency && exchangeRates[savedCurrency]) $('currency').value = savedCurrency;
+    } catch (_) {}
+    updateConstituencies();
+    renderProperties(exampleProperties.filter(p => p.purpose === 'Buy'));
+    supabaseClient.auth.getSession().then(({ data }) => {
+      if (data.session) { currentUser = data.session.user; $('loginBtn').textContent = 'Account'; $('signupBtn').textContent = 'Log out'; }
+    });
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        authMode = 'login'; authStep = 'recovery';
+        $('authModal').classList.add('open');
+        $('authTitle').textContent = 'Choose a new password';
+        $('authSubtitle').textContent = 'Enter your new password below.';
+        $('phoneGroup').classList.add('hidden'); $('otpGroup').hidden = true;
+        $('confirmGroup').classList.add('hidden'); $('passwordRules').classList.add('hidden');
+        $('authPasswordGroup').classList.remove('hidden'); $('authPassword').required = true;
+        $('authSubmit').textContent = 'Update password';
+        $('switchText').classList.add('hidden'); $('resetPasswordRow').classList.add('hidden');
+        setAuthStatus('');
+      }
+      currentUser = session?.user || null;
+      if (!currentUser) { $('loginBtn').textContent = 'Log in'; $('signupBtn').textContent = 'Sign up'; }
+    });
+  </script>
+</body>
+</html>
